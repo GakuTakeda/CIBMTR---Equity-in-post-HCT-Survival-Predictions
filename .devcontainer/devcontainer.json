@@ -1,0 +1,21 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/debian
+
+{
+	"name": "Kaggle Python GPU Build Dev Container",
+	"image": "kaggle/python-gpu-build",
+	// VSCode が開く作業ディレクトリを指定
+
+    "build": {
+    "dockerfile": "Dockerfile",
+    "context": "docker-python"
+    },
+
+	"workspaceFolder": "/CIBMTR---Equity-in-post-HCT-Survival-Predictions",
+	// ホストのプロジェクトフォルダをコンテナ内にマウントする設定
+    "mounts": [ "source=/home/tkdgk/CIBMTR---Equity-in-post-HCT-Survival-Predictions/,target=/CIBMTR---Equity-in-post-HCT-Survival-Predictions/,type=bind"],
+
+	"remoteUser": "tkdgk",
+
+	"postCreateCommand": "echo 'source /tkdgk/myenv/bin/activate' >> ~/.bashrc"
+  }
