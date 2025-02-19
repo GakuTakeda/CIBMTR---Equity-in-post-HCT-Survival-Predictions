@@ -28,6 +28,8 @@ import tqdm
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer
 import copy
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
 
 class CFG:
 
@@ -347,7 +349,7 @@ class MD:
 md = MD(train_data, cat_cols, CFG.early_stop, CFG.penalizer, CFG.n_splits)
 train_data = md.create_targets()
 
-# %%
+# early_stopping入れる
 def validate(model_target, data, cv, weights, csv_name):
     for col in cat_cols:
         data[col] = data[col].astype('category')
@@ -361,9 +363,17 @@ def validate(model_target, data, cv, weights, csv_name):
     for fold, (train_index, valid_index) in enumerate(tqdm.tqdm(cv.split(X, y), total=cv.get_n_splits(), desc="Folds")):
         models = []
         for (model, target) in model_target:
-            # モデルの学習
-            model.fit(X.iloc[train_index], y[target].iloc[train_index])
-            # 検証データで予測
+            x_train, x_early, y_train, y_early = train_test_split(X.iloc[train_index], y[target].iloc[train_index], test_size=0.2, random_state=42,shuffle=True)
+
+            if model.__class__.__name__ == 'CatBoostRegressor':
+                model.fit(x_train, y_train, eval_set=(x_early, y_early), early_stopping_rounds=CFG.early_stop, verbose=0)
+            elif model.__class__.__name__ == 'XGBRegressor':
+                model.fit(x_train, y_train, eval_set=(x_early, y_early), early_stopping_rounds=CFG.early_stop, verbose=0)
+            elif model.__class__.__name__ == 'LGBMRegressor':
+                model.fit(x_train, y_train, eval_set=(x_early, y_early), early_stopping_rounds=CFG.early_stop, verbose=0)
+            else:
+                model.fit(X.iloc[train_index], y[target].iloc[train_index])
+
 
             preds = data[['ID']].iloc[valid_index].copy()
             preds['prediction'] = model.predict(X.iloc[valid_index])
@@ -373,6 +383,8 @@ def validate(model_target, data, cv, weights, csv_name):
             key = f"{model.__class__.__name__}_{target}_fold{fold}"
             target_scores[key] = s
             models.append(model)
+            print("{fold}目の{model}の{target}のスコア: {s:.4f}".format(fold=fold, model=model.__class__.__name__,
+                                                                target=target, s=s))
         
         # 複数モデルのアンサンブル
         ensemble_model = VotingRegressor(estimators=[(f"{model.__class__.__name__}_{i}", model) for i, model in enumerate(models)], weights=weights)
