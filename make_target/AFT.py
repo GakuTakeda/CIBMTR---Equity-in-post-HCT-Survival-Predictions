@@ -1,7 +1,3 @@
-
-
-
-# %%
 import warnings
 from pathlib import Path
 warnings.filterwarnings('ignore')
@@ -363,13 +359,30 @@ def validate(model_target, data, cv, weights, csv_name):
         models = []
         oof_preds = np.zeros((len(valid_index), len(model_target)))
         for i, (model, target) in enumerate(model_target):
-            x_train, x_early, y_train, y_early = train_test_split(X.iloc[train_index], y[target].iloc[train_index], test_size=0.2, random_state=42,shuffle=True)
+            x_train, x_early, y_train, y_early = train_test_split(X.iloc[train_index], y.iloc[train_index], test_size=0.2, random_state=42,shuffle=True)
 
             if model.__class__.__name__ == 'CatBoostRegressor':
-                model.fit(x_train, y_train, eval_set=(x_early, y_early),  early_stopping_rounds=CFG.early_stop, verbose=0)
+                if any(name for name, obj in globals().items() if obj is model and name == "cat_aft_model"):
+                    y_train_aft = np.column_stack((y_train["target4"].values, y_train["efs"].values))
+                    y_early_aft = np.column_stack((y_early["target4"].values, y_early["efs"].values))
+                    model.fit(x_train, y_train_aft, eval_set=(x_early, y_early_aft),  early_stopping_rounds=CFG.early_stop, verbose=0)     
+                else:
+                    y_train = y_train[target].copy()
+                    y_early = y_early[target].copy()
+                    model.fit(x_train, y_train, eval_set=(x_early, y_early),  early_stopping_rounds=CFG.early_stop, verbose=0)
+        
             elif model.__class__.__name__ == 'XGBRegressor':
-                model.fit(x_train, y_train, eval_set=[(x_early, y_early)],eval_metric='rmse',callbacks=[xgb.callback.EarlyStopping(rounds=CFG.early_stop)], verbose=0)
+                if any(name for name, obj in globals().items() if obj is model and name == "xgb_aft_model"):
+                    y_train_aft = np.column_stack((y_train["target4"].values, y_train["efs"].values))
+                    y_early_aft = np.column_stack((y_early["target4"].values, y_early["efs"].values))
+                    model.fit(x_train, y_train_aft,  eval_set=[(x_early,y_early_aft)],callbacks=[xgb.callback.EarlyStopping(rounds=CFG.early_stop)], verbose=0)
+                else:
+                    y_train = y_train[target].copy()
+                    y_early = y_early[target].copy()
+                    model.fit(x_train, y_train, eval_set=[(x_early, y_early)],eval_metric='rmse',callbacks=[xgb.callback.EarlyStopping(rounds=CFG.early_stop)], verbose=0)
             elif model.__class__.__name__ == 'LGBMRegressor':
+                y_train = y_train[target].copy()
+                y_early = y_early[target].copy()
                 model.fit(x_train, y_train, eval_set=[(x_early, y_early)], eval_metric='rmse',callbacks=[lgb.early_stopping(CFG.early_stop, verbose=0), lgb.log_evaluation(0)])
             else:
                 model.fit(X.iloc[train_index], y[target].iloc[train_index])
@@ -418,6 +431,35 @@ def get_dummy(data, columns=cat_cols):
   return pd.get_dummies(data, columns=columns)
 random_params = {'max_depth': 35, 'n_estimators': 183, 'min_samples_split': 9, 'min_samples_leaf': 7, 'max_leaf_nodes': 15}
 
+cat_aft_params = {"loss_function" : "SurvivalAft:dist=Normal",
+ "eval_metric": "SurvivalAft",
+ 'learning_rate': 0.03,
+ 'iterations': 600,
+ 'bootstrap_type': "Bernoulli",
+ 'max_depth': 6,
+ 'random_strength': 0.30,
+ 'verbose': 0,
+ 'random_state': 42,
+ 'cat_features': cat_cols,
+                     }
+
+xgb_aft_params = {
+        "max_depth": 4,  
+        "colsample_bytree": 0.5,  
+        "subsample": 0.8,  
+        "learning_rate": 0.02,
+        "min_child_weight": 80,
+        "objective": "survival:aft",
+        "eval_metric": "aft-nloglik",
+        "aft_loss_distribution": "normal",  # or "logistic", "extreme"
+        "aft_loss_distribution_scale": 1.0,
+        "seed": 42,
+        "n_estimators": 211,
+        'reg_alpha': 0.55, 
+        'reg_lambda': 6.78
+
+    }
+
 
 lgb_model = lgb.LGBMRegressor(**CFG.lgb_params)
 cat_model = CatBoostRegressor(**CFG.ctb_params, verbose=0, cat_features=cat_cols)
@@ -427,11 +469,14 @@ cox_model_2 = CatBoostRegressor(**CFG.cox2_params, verbose=0, cat_features=cat_c
 random_model = RandomForestRegressor(**random_params, random_state=42)
 random_model = Pipeline(steps=[('get_dummy',FunctionTransformer(get_dummy)),('regressor',random_model)])
 
+cat_aft_model = CatBoostRegressor(**cat_aft_params)
+xgb_aft_model = xgb.XGBRegressor(**xgb_aft_params,enable_categorical=True)
+
 target = Targets(train_data, cat_cols, CFG.penalizer, CFG.n_splits)
 
 cv, _ = target._prepare_cv()
 
-model_target = [[cat_model, "target1"], [lgb_model, "target1"], [xgb_model, "target1"], [random_model, "target1"],[cat_model, "target2"], [lgb_model, "target2"], [xgb_model, "target2"], [random_model, "target2"], [cat_model, "target3"], [lgb_model, "target3"],[xgb_model, "target3"], [random_model, "target3"], [cox_model_1, "target4"], [cox_model_2, "target4"]]
-weights = [3, 1, 1, 0.5, 7, 2, 2, 1, 7, 2, 2, 1,6, 6]
-validate(model_target, train_data, cv, weights, "default:lgb+xgb+rf")
+model_target = [(cat_aft_model, 'target4'), (xgb_aft_model, 'target4')]
+
+validate(model_target, train_data, cv, CFG.weights, 'demo_aft')
 

@@ -1,0 +1,107 @@
+polorsを使わないやつあった
+
+class FE:
+    def __init__(self):
+        pass # 初期化メソッドには何も処理を行わない
+
+    def _load_data(self, path):
+        df = pd.read_csv(path)
+        return df
+
+    def _update_hla_columns(self, df): # "hla_high_xxx"、"hla_low_xxx"系の特徴量について、既知のデータを用いずに自分で作成
+        df['hla_nmdp_6'] = (
+            df['hla_match_a_low'].fillna(0)
+            + df['hla_match_b_low'].fillna(0)
+            + df['hla_match_drb1_high'].fillna(0)
+        )
+        df['hla_low_res_6'] = (
+            df['hla_match_a_low'].fillna(0)
+            + df['hla_match_b_low'].fillna(0)
+            + df['hla_match_drb1_low'].fillna(0)
+        )
+        df['hla_high_res_6'] = (
+            df['hla_match_a_high'].fillna(0)
+            + df['hla_match_b_high'].fillna(0)
+            + df['hla_match_drb1_high'].fillna(0)
+        )
+        df['hla_low_res_8'] = (
+            df['hla_match_a_low'].fillna(0)
+            + df['hla_match_b_low'].fillna(0)
+            + df['hla_match_c_low'].fillna(0)
+            + df['hla_match_drb1_low'].fillna(0)
+        )
+        df['hla_high_res_8'] = (
+            df['hla_match_a_high'].fillna(0)
+            + df['hla_match_b_high'].fillna(0)
+            + df['hla_match_c_high'].fillna(0)
+            + df['hla_match_drb1_high'].fillna(0)
+        )
+        df['hla_low_res_10'] = (
+            df['hla_match_a_low'].fillna(0)
+            + df['hla_match_b_low'].fillna(0)
+            + df['hla_match_c_low'].fillna(0)
+            + df['hla_match_drb1_low'].fillna(0)
+            + df['hla_match_dqb1_low'].fillna(0)
+        )
+        df['hla_high_res_10'] = (
+            df['hla_match_a_high'].fillna(0)
+            + df['hla_match_b_high'].fillna(0)
+            + df['hla_match_c_high'].fillna(0)
+            + df['hla_match_drb1_high'].fillna(0)
+            + df['hla_match_dqb1_high'].fillna(0)
+        )
+        return df
+
+    def _cast_datatypes(self, df): # 欠損値の補完
+        num_cols = [
+            'hla_high_res_8', 'hla_low_res_8', 'hla_high_res_6', 'hla_low_res_6',
+            'hla_high_res_10', 'hla_low_res_10', 'hla_match_dqb1_high',
+            'hla_match_dqb1_low', 'hla_match_drb1_high', 'hla_match_drb1_low',
+            'hla_nmdp_6', 'year_hct', 'hla_match_a_high', 'hla_match_a_low',
+            'hla_match_b_high', 'hla_match_b_low', 'hla_match_c_high',
+            'hla_match_c_low', 'donor_age', 'age_at_hct', 'comorbidity_score',
+            'karnofsky_score', 'efs', 'efs_time'
+        ]
+        for col in df.columns:
+            if col in num_cols:
+                df[col] = df[col].fillna(-1).astype('float32') # 数値型の場合は欠損値を-1で補完
+            else:
+                df[col] = df[col].fillna('Unknown').astype('category') # カテゴリ型の場合は欠損値を'Unknown'で補完
+        df['ID'] = df['ID'].astype('int32') # データ型の変更
+        return df
+    
+    def add_features(df):
+        sex_match = df.sex_match.astype(str)
+        sex_match = sex_match.str.split("-").str[0] == sex_match.str.split("-").str[1]
+        df['sex_match_bool'] = sex_match
+        df.loc[df.sex_match.isna(), 'sex_match_bool'] = np.nan
+        df.loc[df.year_hct == 2019, 'year_hct'] = 2020
+        df['is_cyto_score_same'] = (df['cyto_score'] == df['cyto_score_detail']).astype(int)
+        df['age_bin'] = pd.cut(df.age_at_hct, [0, 0.0441, 16, 30, 50, 100])
+        df['age_ts'] = df.age_at_hct / df.donor_age
+        df['age_comorbidity'] = df['age_at_hct'] * df['comorbidity_score']
+        df['age_karnofsky'] = df['age_at_hct'] * df['karnofsky_score']
+        df['karnofsky_squared'] = df['karnofsky_score'] ** 2
+        df['cos_year'] = np.cos(df['year_hct'] * (2 * np.pi) / 100)
+        df['diff_age_vs_donor'] = df['age_at_hct'] - df['donor_age']
+        # sex_one: 性別一致情報から患者の性別を抽出
+        df['sex_one'] = df['sex_match'].str[0]  # 最初の文字を抽出
+        # sex_two: 性別一致情報からドナーの性別を抽出
+        df['sex_two'] = df['sex_match'].str[2]  # 3番目の文字を抽出
+        # SameSex: 患者とドナーの性別が一致しているか
+        df['same_sex'] = (df['sex_one'] == df['sex_two']).astype(int)
+        return df
+
+    def info(self, df): #データフレームのメモリ使用量を確認
+        print(f'\nShape of dataframe: {df.shape}')
+        mem = df.memory_usage().sum() / 1024**2
+        print('Memory usage: {:.2f} MB\n'.format(mem))
+        print(df.head())
+
+    def apply_fe(self, path): # 上記関数の適用
+        df = self._load_data(path) # pathのデータを読み込む
+        df = self._update_hla_columns(df) # hla_high_xxx、hla_low_xxx系の特徴量を追加
+        df = self._cast_datatypes(df) # 欠損値の補完
+        self.info(df) # データフレームのメモリ確認
+        cat_cols = [col for col in df.columns if df[col].dtype == 'category']
+        return df, cat_cols

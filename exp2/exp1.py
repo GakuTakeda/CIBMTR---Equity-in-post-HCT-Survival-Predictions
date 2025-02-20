@@ -190,6 +190,11 @@ class FE:
             'age_at_hct',
             'comorbidity_score',
             'karnofsky_score',
+            "big_age",
+            "year_hct",
+            "is_cyto_score_same",
+            "age_ts",
+            "age_bin",
             'efs',
             'efs_time'
         ]
@@ -203,14 +208,74 @@ class FE:
                 df = df.with_columns(pl.col(col).fill_null('Unknown').cast(pl.String))  
 
         return df.with_columns(pl.col('ID').cast(pl.Int32))
-
+    #'is_cyto_score_same'と"year_hct"だけしか元のノートでは使われていなかった
+    def engineer(self, df):
+        # 年齢区分の境界値を定義（pd.cut の代替）
+        bins = [0, 0.0441, 16, 30, 50, 100]
+    
+        df = df.with_columns([
+            # sex_match_bool:
+            # まず、sex_match を文字列にキャストし "-" で分割後、0番目と1番目が等しいか判定。
+            # sex_match が null の場合は null を設定。
+            pl.when(pl.col("sex_match").is_null())
+            .then(pl.lit(None, dtype=pl.Boolean))
+            .otherwise(
+              pl.col("sex_match").cast(pl.Utf8)
+              .str.split("-")
+              .arr.get(0) == pl.col("sex_match").cast(pl.Utf8)
+              .str.split("-")
+              .arr.get(1)
+            ).alias("sex_match_bool"),
+        
+            # big_age: age_at_hct > 16
+            (pl.col("age_at_hct") > 16).alias("big_age"),
+        
+            # year_hct: 2019 の場合は 2020 に置き換え
+            pl.when(pl.col("year_hct") == 2019)
+              .then(2020)
+              .otherwise(pl.col("year_hct"))
+              .alias("year_hct"),
+        
+            # is_cyto_score_same: cyto_score と cyto_score_detail が等しければ 1、違えば 0
+            (pl.col("cyto_score") == pl.col("cyto_score_detail"))
+              .cast(pl.Int32)
+              .alias("is_cyto_score_same"),
+        
+            # strange_age: age_at_hct が 0.044 と等しいかどうか
+            (pl.col("age_at_hct") == 0.044).alias("strange_age"),
+        
+            pl.when(pl.col("age_at_hct") < bins[1])
+              .then(pl.lit(f"[{bins[0]}, {bins[1]})"))
+              .when((pl.col("age_at_hct") >= bins[1]) & (pl.col("age_at_hct") < bins[2]))
+              .then(pl.lit(f"[{bins[1]}, {bins[2]})"))
+              .when((pl.col("age_at_hct") >= bins[2]) & (pl.col("age_at_hct") < bins[3]))
+              .then(pl.lit(f"[{bins[2]}, {bins[3]})"))
+              .when((pl.col("age_at_hct") >= bins[3]) & (pl.col("age_at_hct") < bins[4]))
+              .then(pl.lit(f"[{bins[3]}, {bins[4]})"))
+              .when((pl.col("age_at_hct") >= bins[4]) & (pl.col("age_at_hct") <= bins[5]))
+              .then(pl.lit(f"[{bins[4]}, {bins[5]})"))
+              .otherwise(pl.lit(None).cast(pl.Utf8))
+              .alias("age_bin"),
+        
+             # age_ts: age_at_hct / donor_age
+            (pl.col("age_at_hct") / pl.col("donor_age")).alias("age_ts")
+        ])
+    
+        #最後に、year_hct から 2000 を引く
+        df = df.with_column(
+            (pl.col("year_hct") - 2000).alias("year_hct")
+        )
+    
+        return df
 
     def apply_fe(self, path):
 
         df = self._load_data(path)   
-        df = self._update_hla_columns(df)                     
+        df = self._update_hla_columns(df)   
+        df = self.engineer(df)                  
         df = self._cast_datatypes(df)        
         df = df.to_pandas()
+        
         
         cat_cols = [col for col in df.columns if df[col].dtype == pl.String]
 
@@ -361,7 +426,7 @@ def validate(model_target, data, cv, weights, csv_name):
     
     for fold, (train_index, valid_index) in enumerate(tqdm.tqdm(cv.split(X, y), total=cv.get_n_splits(), desc="Folds")):
         models = []
-        oof_preds = np.zeros((len(valid_index), len(model_target)))
+        oof_preds = np.zeros(len(valid_index), len(model_target))
         for i, (model, target) in enumerate(model_target):
             x_train, x_early, y_train, y_early = train_test_split(X.iloc[train_index], y[target].iloc[train_index], test_size=0.2, random_state=42,shuffle=True)
 
@@ -411,8 +476,8 @@ def validate(model_target, data, cv, weights, csv_name):
     combined_df = pd.concat([fold_scores_df, target_scores_df], axis=0)
 
     # CSV ファイルとして出力
-    combined_df.to_csv(csv_name + ".csv", index=False)
-    print("CSVファイル",csv_name,"の出力が完了しました。")
+    combined_df.to_csv("{csv_name}.csv", index=False)
+    print("CSVファイル{csv_name}の出力が完了しました。")
 
 def get_dummy(data, columns=cat_cols):
   return pd.get_dummies(data, columns=columns)
@@ -427,11 +492,14 @@ cox_model_2 = CatBoostRegressor(**CFG.cox2_params, verbose=0, cat_features=cat_c
 random_model = RandomForestRegressor(**random_params, random_state=42)
 random_model = Pipeline(steps=[('get_dummy',FunctionTransformer(get_dummy)),('regressor',random_model)])
 
+
+model_target = [[cat_model, "target1"], [lgb_model, "target1"], [cat_model, "target2"], [lgb_model, "target2"], [cat_model, "target3"], [lgb_model, "target3"],[cox_model_1, "target4"], [cox_model_2, "target4"]]
+model_and_target =  [[random_model, 'efs_time'], [cat_model, "target2"], [lgb_model, "target2"], [cat_model, "target3"], [lgb_model, "target3"],[cox_model_1, "target4"], [cox_model_2, "target4"]]
+
+weights = [2, 6, 3, 6, 3, 6, 6]
+
 target = Targets(train_data, cat_cols, CFG.penalizer, CFG.n_splits)
 
 cv, _ = target._prepare_cv()
-
-model_target = [[cat_model, "target1"], [lgb_model, "target1"], [xgb_model, "target1"], [random_model, "target1"],[cat_model, "target2"], [lgb_model, "target2"], [xgb_model, "target2"], [random_model, "target2"], [cat_model, "target3"], [lgb_model, "target3"],[xgb_model, "target3"], [random_model, "target3"], [cox_model_1, "target4"], [cox_model_2, "target4"]]
-weights = [3, 1, 1, 0.5, 7, 2, 2, 1, 7, 2, 2, 1,6, 6]
-validate(model_target, train_data, cv, weights, "default:lgb+xgb+rf")
-
+validate(model_target, train_data, cv, CFG.weights, str([model_target, weights]))
+    

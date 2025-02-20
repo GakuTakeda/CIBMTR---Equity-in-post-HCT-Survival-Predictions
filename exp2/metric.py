@@ -39,7 +39,7 @@ class ParticipantVisibleError(Exception):
     pass
 
 
-def score(solution: pd.DataFrame, submission: pd.DataFrame) -> float:
+def score(solution: pd.DataFrame, submission: pd.DataFrame, row_id_column_name: str) -> float:
     """
     >>> import pandas as pd
     >>> row_id_column_name = "id"
@@ -53,8 +53,8 @@ def score(solution: pd.DataFrame, submission: pd.DataFrame) -> float:
     0.75
     """
 
-    # del solution[row_id_column_name]
-    # del submission[row_id_column_name]
+    del solution[row_id_column_name]
+    del submission[row_id_column_name]
 
     event_label = 'efs'
     interval_label = 'efs_time'
