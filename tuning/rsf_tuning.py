@@ -154,7 +154,7 @@ def get_dummy(data, columns=cat_cols):
 X = get_dummy(X)
 def objective(trial):
     # Optuna によるハイパーパラメータの探索範囲
-    n_estimators = trial.suggest_int("n_estimators", 50, 200, step=10)
+    n_estimators = trial.suggest_int("n_estimators", 50, 150, step=10)
     min_samples_split = trial.suggest_int("min_samples_split", 2, 20)
     min_samples_leaf = trial.suggest_int("min_samples_leaf", 1, 10)
     max_depth = trial.suggest_int("max_depth", 3, 20)
@@ -181,7 +181,7 @@ def objective(trial):
 
 # 5. Optuna で最適化を実行
 study = optuna.create_study(direction="maximize")  # C-index を最大化
-study.optimize(objective, n_trials=50,n_jobs =-1)  # 試行回数を 50 に設定
+study.optimize(objective, n_trials=50)  # 試行回数を 50 に設定
 
 # 6. 最適なハイパーパラメータを取得
 best_params = study.best_trial.params

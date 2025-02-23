@@ -476,7 +476,7 @@ target = Targets(train_data, cat_cols, CFG.penalizer, CFG.n_splits)
 
 cv, _ = target._prepare_cv()
 
-model_target = [(cat_aft_model, 'target4'), (xgb_aft_model, 'target4')]
+model_target = [(xgb_aft_model, 'target4')]
 
 validate(model_target, train_data, cv, CFG.weights, 'demo_aft')
 
