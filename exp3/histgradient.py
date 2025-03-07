@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import rankdata 
 import warnings
 warnings.filterwarnings('ignore')
+from sklearn.ensemble import HistGradientBoostingRegressor as HGBR
 
 train = pd.read_csv("../input/equity-post-HCT-survival-predictions/train.csv")
 test = pd.read_csv("../input/equity-post-HCT-survival-predictions/test.csv")
@@ -77,30 +78,38 @@ from sklearn.model_selection import KFold
 from metric import score
 
 def objective(trial):
-    # --- 1. 調整したいパラメータを trial からサンプリング ---
-    learning_rate = trial.suggest_loguniform('learning_rate', 0.008, 0.015)
-    min_child_samples = trial.suggest_int('min_child_samples', 5, 20)
-    reg_lambda = trial.suggest_float('reg_lambda', 1e-2, 1e-1, log=True)
-    reg_alpha = trial.suggest_float('reg_alpha', 0.015, 0.5, log=True)
-    num_leaves = trial.suggest_int('num_leaves', 20, 35)
-    max_depth = trial.suggest_int('max_depth', 6, 13)
-    num_iterations = trial.suggest_int('num_iterations', 5250, 5650, step=50)
-    max_bin = trial.suggest_int('max_bin', 200, 256, step=8)
+    # =======================
+    # パラメータのサンプリング
+    # =======================
+    # 特に重要度の高いものを優先的に調整
+    learning_rate = trial.suggest_float("learning_rate", 0.01, 0.5, log=True)
+    max_iter = trial.suggest_int("max_iter", 1000, 2000, step=50)
+    max_leaf_nodes = trial.suggest_int("max_leaf_nodes", 2, 48, log=True)
+    max_depth = trial.suggest_int("max_depth", 10, 30)
+    min_samples_leaf = trial.suggest_int("min_samples_leaf", 25, 50)
+    l2_regularization = trial.suggest_float("l2_regularization", 1e-8, 1e-2, log=True)
+    max_bins = trial.suggest_int("max_bins", 100, 255)
+    
+    # ===================
+    # モデルの定義 (HGBR)
+    # ===================
+    model = HGBR(
+        learning_rate=learning_rate,
+        max_iter=max_iter,
+        max_leaf_nodes=max_leaf_nodes,
+        max_depth=max_depth,
+        min_samples_leaf=min_samples_leaf,
+        l2_regularization=l2_regularization,
+        max_bins=max_bins,
+        # 下記は必要に応じて
+        # loss="squared_error",
+        # early_stopping=False,
+        random_state=42,
+        categorical_features=CATS
+    )
 
-    # 固定パラメータ（例）
-    fixed_params = {
-        'objective': 'regression',
-        'metric': 'rmse',
-        'extra_trees': True,
-        'verbose': -1,
-        'seed': 42,
-        'device': 'cpu',
-    }
-
-    # --- 2. クロスバリデーション（5-fold）を用意 ---
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
 
-    # 評価スコアを格納するリスト
     scores = []
 
     # --- 3. k-fold で学習＆評価 ---
@@ -108,22 +117,9 @@ def objective(trial):
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-        model = LGBMRegressor(
-            learning_rate=learning_rate,
-            min_child_samples=min_child_samples,
-            reg_lambda=reg_lambda,
-            reg_alpha=reg_alpha,
-            num_leaves=num_leaves,
-            max_depth=max_depth,
-            num_iterations=num_iterations,
-            max_bin=max_bin,
-            **fixed_params
-        )
         # 学習（early_stopping を使いたい場合は eval_set, early_stopping_rounds を指定）
         model.fit(
-            X_train, y_train,
-            eval_set=[(X_val, y_val)],
-            callbacks=[lgb.early_stopping(100, verbose=0)]
+            X_train, y_train
         )
 
         # 予測
@@ -137,13 +133,10 @@ def objective(trial):
     # --- 4. fold の平均スコアを最終評価値として返す ---
     return np.mean(scores)
 
-
 # ========= Optuna で最適化実行 =========
 # 「最大化」を指定（自作スコアが大きいほど良いという扱い）
 study = optuna.create_study(direction='maximize')
 study.optimize(objective, n_trials=50)  # 試行回数=30 (例)
 
- #score: 0.6740467722917443 parameters: {'learning_rate': 0.009453691809675214, 'min_child_samples': 14, 'reg_lambda': 0.038763067060145956, 'reg_alpha': 0.023205959833390973, 'num_leaves': 23, 'max_depth': 7}
- #score: 0.674140767427265  parameters: {'learning_rate': 0.010249196427607903, 'min_child_samples': 7, 'reg_lambda': 0.04381443853306703, 'reg_alpha': 0.010856948539014647, 'num_leaves': 30, 'max_depth': 6, 'num_iterations': 5500}
- #score: 0.6743606622729108 parameters: {'learning_rate': 0.010247473758487297, 'min_child_samples': 14, 'reg_lambda': 0.025968901196413107, 'reg_alpha': 0.010082657579302273, 'num_leaves': 26, 'max_depth': 11, 'num_iterations': 5300, 'max_bin': 224}
- #score: 0.6745001987295776 parameters: {'learning_rate': 0.011280997556651065, 'min_child_samples': 10, 'reg_lambda': 0.021238168657597097, 'reg_alpha': 0.1728826435936071, 'num_leaves': 28, 'max_depth': 13, 'num_iterations': 5500, 'max_bin': 240}
+# 0.6699832895289106 and parameters: {'learning_rate': 0.015865608439848605, 'max_iter': 1500, 'max_leaf_nodes': 24, 'max_depth': 16, 'min_samples_leaf': 35, 'l2_regularization': 0.04728867704353522, 'max_bins': 88}. Best is trial 30 with value: 0.6699832895289106.
+# 0.6702724830149281 and parameters: {'learning_rate': 0.028100803080866436, 'max_iter': 1650, 'max_leaf_nodes': 36, 'max_depth': 19, 'min_samples_leaf': 23, 'l2_regularization': 0.00016285549301989487, 'max_bins': 151}. Best is trial 22 with value: 0.6702724830149281

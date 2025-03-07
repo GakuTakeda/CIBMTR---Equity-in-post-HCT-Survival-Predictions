@@ -10,11 +10,23 @@ from lifelines import KaplanMeierFitter
 def transform_survival_probability(df, time_col='efs_time', event_col='efs'):
     kmf = KaplanMeierFitter()
     kmf.fit(df[time_col], df[event_col])
-    y = kmf.survival_function_at_times(df[time_col]).values
-    return y
-train["y"] = transform_survival_probability(train, time_col='efs_time', event_col='efs')
+    kap = kmf.survival_function_at_times(df[time_col]).values
+    return kap
 
-RMV = ["ID","efs","efs_time","y"]
+from lifelines import  NelsonAalenFitter
+def create_nelson(data):
+    data=data.copy()
+    naf = NelsonAalenFitter(nelson_aalen_smoothing=0)
+    naf.fit(durations=data['efs_time'], event_observed=data['efs'])
+    return naf.cumulative_hazard_at_times(data['efs_time']).values*-1
+
+combined = pd.concat([train,test],axis=0,ignore_index=True)
+print("We LABEL ENCODE the CATEGORICAL FEATURES: ",end="")
+
+train["kap"] = transform_survival_probability(train, time_col='efs_time', event_col='efs')
+train["aln"] = create_nelson(train)
+
+RMV = ["ID","efs","efs_time","kap", "aln"]
 FEATURES = [c for c in train.columns if not c in RMV]
 print(f"There are {len(FEATURES)} FEATURES: {FEATURES}")
 
@@ -70,9 +82,9 @@ for i, (train_index, test_index) in enumerate(kf.split(train)):
     print("#"*25)
     
     x_train = train.loc[train_index,FEATURES].copy()
-    y_train = train.loc[train_index,"y"]
+    y_train = train.loc[train_index,"kap"]
     x_valid = train.loc[test_index,FEATURES].copy()
-    y_valid = train.loc[test_index,"y"]
+    y_valid = train.loc[test_index,"kap"]
     x_test = test[FEATURES].copy()
 
     model_xgb = XGBRegressor(
@@ -126,9 +138,9 @@ for i, (train_index, test_index) in enumerate(kf.split(train)):
     print("#"*25)
     
     x_train = train.loc[train_index,FEATURES].copy()
-    y_train = train.loc[train_index,"y"]
+    y_train = train.loc[train_index,"kap"]
     x_valid = train.loc[test_index,FEATURES].copy()
-    y_valid = train.loc[test_index,"y"]
+    y_valid = train.loc[test_index,"kap"]
     x_test = test[FEATURES].copy()
 
     model_cat = CatBoostRegressor(
@@ -173,9 +185,9 @@ for i, (train_index, test_index) in enumerate(kf.split(train)):
     print("#"*25)
     
     x_train = train.loc[train_index,FEATURES].copy()
-    y_train = train.loc[train_index,"y"]    
+    y_train = train.loc[train_index,"kap"]    
     x_valid = train.loc[test_index,FEATURES].copy()
-    y_valid = train.loc[test_index,"y"]
+    y_valid = train.loc[test_index,"kap"]
     x_test = test[FEATURES].copy()
 
     model_lgb = LGBMRegressor(
@@ -309,12 +321,119 @@ y_pred["prediction"] = oof_cat_cox
 cat_for_cox = score(y_true.copy(), y_pred.copy(), "ID")
 print(f"\nOverall CV for CatBoost Survival:Cox =",cat_for_cox)
 
+train.loc[train.efs == 0, "aln"] = (-(-train.loc[train.efs == 0, "aln"])**0.5)
+
+#xgboost for aalen
+
+FOLDS = 10
+kf = KFold(n_splits=FOLDS, shuffle=True, random_state=42)
+    
+oof_xgb_aln = np.zeros(len(train))
+pred_xgb_aln = np.zeros(len(test))
+
+for i, (train_index, test_index) in enumerate(kf.split(train)):
+
+    print("#"*25)
+    print(f"### Fold {i+1}")
+    print("#"*25)
+    
+    x_train = train.loc[train_index,FEATURES].copy()
+    y_train = train.loc[train_index,"aln"]    
+    x_valid = train.loc[test_index,FEATURES].copy()
+    y_valid = train.loc[test_index,"aln"]
+    x_test = test[FEATURES].copy()
+
+    model_xgb_aln = XGBRegressor(
+        # device="cuda",
+        max_depth=4,  
+        colsample_bytree=0.55,  
+        subsample=0.8,  
+        n_estimators=5000,  
+        learning_rate=0.02,  
+        enable_categorical=True,
+        min_child_weight=80,
+        early_stopping_rounds=200,
+        n_jobs=4
+    )
+    model_xgb_aln.fit(
+        x_train, y_train,
+        eval_set=[(x_valid, y_valid)],  
+        verbose=500  
+    )
+    
+    # INFER OOF
+    oof_xgb_aln[test_index] = model_xgb_aln.predict(x_valid)
+    # INFER TEST
+    pred_xgb_aln += model_xgb_aln.predict(x_test)
+
+# COMPUTE AVERAGE TEST PREDS
+pred_xgb_aln /= FOLDS
+
+y_true = train[["ID","efs","efs_time","race_group"]].copy()
+y_pred = train[["ID"]].copy()
+y_pred["prediction"] = oof_xgb_aln
+xgb_for_aln = score(y_true.copy(), y_pred.copy(), "ID")
+print(f"\nOverall CV for XGBoost Nelson Aalen =",xgb_for_aln)
+
+#lightgbm for aalen
+FOLDS = 10
+kf = KFold(n_splits=FOLDS, shuffle=True, random_state=42)
+    
+oof_lgb_aln = np.zeros(len(train))
+pred_lgb_aln = np.zeros(len(test))
+
+for i, (train_index, test_index) in enumerate(kf.split(train)):
+
+    print("#"*25)
+    print(f"### Fold {i+1}")
+    print("#"*25)
+    
+    x_train = train.loc[train_index,FEATURES].copy()
+    y_train = train.loc[train_index,"aln"]    
+    x_valid = train.loc[test_index,FEATURES].copy()
+    y_valid = train.loc[test_index,"aln"]
+    x_test = test[FEATURES].copy()
+
+    model_lgb_aln = LGBMRegressor(
+        objective='regression',
+        min_child_samples=10,
+        num_iterations=5500,
+        learning_rate=0.01128,
+        extra_trees=True,
+        reg_lambda=0.0212,
+        reg_alpha=0.173,
+        num_leaves=27,
+        metric='rmse',
+        max_depth=13,
+        device='cpu',
+        max_bin=240,
+        verbose=-1
+    )
+    model_lgb_aln.fit(
+        x_train, y_train,
+        eval_set=[(x_valid, y_valid)]
+    )
+    
+    # INFER OOF
+    oof_lgb_aln[test_index] = model_lgb_aln.predict(x_valid)
+    # INFER TEST
+    pred_lgb_aln += model_lgb_aln.predict(x_test)
+
+# COMPUTE AVERAGE TEST PREDS
+pred_lgb_aln /= FOLDS
+
+y_true = train[["ID","efs","efs_time","race_group"]].copy()
+y_pred = train[["ID"]].copy()
+y_pred["prediction"] = oof_lgb_aln
+lgb_for_aln = score(y_true.copy(), y_pred.copy(), "ID")
+print(f"\nOverall CV for LightGBM Nelson Aalen =",lgb_for_aln)
+
+
 from scipy.stats import rankdata 
 
 y_true = train[["ID","efs","efs_time","race_group"]].copy()
 y_pred = train[["ID"]].copy()
-y_pred["prediction"] = rankdata(oof_xgb) + rankdata(oof_cat) + rankdata(oof_lgb)\
-                     + rankdata(oof_xgb_cox) + rankdata(oof_cat_cox)
+y_pred["prediction"] = (rankdata(oof_xgb)*2 + rankdata(oof_cat)*2 + rankdata(oof_lgb) + rankdata(oof_xgb_cox) + rankdata(oof_cat_cox) + rankdata(oof_xgb_aln)*6 + rankdata(oof_lgb_aln)*2)/15
 m = score(y_true.copy(), y_pred.copy(), "ID")
 
 df_results = pd.DataFrame({
@@ -323,6 +442,8 @@ df_results = pd.DataFrame({
     "lgb_for_kap": [lgb_for_kap],
     "xgb_for_cox": [xgb_for_cox],
     "cat_for_cox": [cat_for_cox],
+    "xgb_for_aln": [xgb_for_aln],
+    "lgb_for_aln": [lgb_for_aln],
     "rank_ensemble": [m]
 })
-df_results.to_csv("ensemble.csv", index=False)
+df_results.to_csv("model_scores_2.csv", index=False)

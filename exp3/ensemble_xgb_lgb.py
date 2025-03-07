@@ -126,17 +126,17 @@ for i in range(FOLDS):
 
     model_lgb = LGBMRegressor(
         objective='regression',
-        min_child_samples=14,
-        num_iterations=6000,
-        learning_rate=0.00945,
+        min_child_samples=10,
+        num_iterations=5500,
+        learning_rate=0.01128,
         extra_trees=True,
-        reg_lambda=0.03876,
-        reg_alpha=0.0232,
-        num_leaves=23,
+        reg_lambda=0.0212,
+        reg_alpha=0.173,
+        num_leaves=27,
         metric='rmse',
-        max_depth=7,
+        max_depth=13,
         device='cpu',
-        max_bin=128,
+        max_bin=240,
         verbose=-1
         )
 
@@ -155,11 +155,11 @@ from metric import score
 
 y_true = train[["ID","efs","efs_time","race_group"]].copy()
 y_pred = train[["ID"]].copy()
-y_pred["prediction"] = (oof_xgb*2 + oof_lgb*1)/3
+y_pred["prediction"] = oof_xgb*0.9 + oof_lgb*0.1
 
 m = score(y_true.copy(), y_pred.copy(), "ID")
 
 df = pd.DataFrame({"Overall_CV": [m]})
 
-df.to_csv("xgb and lgb ensemble-2.csv", index=False)
+df.to_csv("xgb and lgb ensemble-4.csv", index=False)
 

@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 from scipy.stats import rankdata 
 import warnings
 warnings.filterwarnings('ignore')
+from sklearn.ensemble import RandomForestRegressor as RFR
+from sklearn.impute import SimpleImputer, KNNImputer
 
 train = pd.read_csv("../input/equity-post-HCT-survival-predictions/train.csv")
 test = pd.read_csv("../input/equity-post-HCT-survival-predictions/test.csv")
@@ -75,32 +77,47 @@ y = train["y_nel"]
 import optuna
 from sklearn.model_selection import KFold
 from metric import score
+imputer = KNNImputer(n_neighbors=5)
+def get_dummy(data, columns=CATS):
+  return pd.get_dummies(data, columns=columns)
+X = get_dummy(X)
+X = pd.DataFrame(imputer.fit_transform(X), columns=X.columns)
 
 def objective(trial):
-    # --- 1. 調整したいパラメータを trial からサンプリング ---
-    learning_rate = trial.suggest_loguniform('learning_rate', 0.008, 0.015)
-    min_child_samples = trial.suggest_int('min_child_samples', 5, 20)
-    reg_lambda = trial.suggest_float('reg_lambda', 1e-2, 1e-1, log=True)
-    reg_alpha = trial.suggest_float('reg_alpha', 0.015, 0.5, log=True)
-    num_leaves = trial.suggest_int('num_leaves', 20, 35)
-    max_depth = trial.suggest_int('max_depth', 6, 13)
-    num_iterations = trial.suggest_int('num_iterations', 5250, 5650, step=50)
-    max_bin = trial.suggest_int('max_bin', 200, 256, step=8)
+    # =====================
+    #  1. ハイパラをサンプリング
+    # =====================
+    n_estimators = trial.suggest_int("n_estimators", 100, 500, step=10)
+    max_depth = trial.suggest_int("max_depth", 20, 40)
+    min_samples_split = trial.suggest_int("min_samples_split", 2, 10)
+    min_samples_leaf = trial.suggest_int("min_samples_leaf", 1, 10)
+    max_features = trial.suggest_categorical("max_features", ["sqrt", "log2", None])  # Noneは全説明変数
+    max_leaf_nodes = trial.suggest_int("max_leaf_nodes", 70, 256, log=True)
+    min_weight_fraction_leaf = trial.suggest_float("min_weight_fraction_leaf", 0.0, 0.1)
+    min_impurity_decrease = trial.suggest_float("min_impurity_decrease", 0.0, 0.001)
+    ccp_alpha = trial.suggest_float("ccp_alpha", 0.0, 0.001)
+    # 0.6258041151128194 and parameters: {'n_estimators': 200, 'max_depth': 28, 'max_features': 'log2', 'bootstrap': False, 'max_leaf_nodes': 124, 'min_weight_fraction_leaf': 0.028305422128100777, 'min_impurity_decrease': 0.0003408432934447886, 'ccp_alpha': 0.00032687722476803404}
+#0.6566553958478558.{'n_estimators': 500, 'max_depth': 20, 'min_samples_split': 7, 'min_samples_leaf': 3, 'max_features': 'sqrt', 'bootstrap': False, 'max_leaf_nodes': 84, 'min_weight_fraction_leaf': 0.18339115885496424, 'min_impurity_decrease': 0.00026095296642912255, 'min_impurity_split': 0.27752486516167274, 'ccp_alpha': 0.0002038254511892803, }. 
+    # =====================
+    #  2. モデルの定義
+    # =====================
+    model = RFR(
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        min_samples_split=min_samples_split,
+        min_samples_leaf=min_samples_leaf,
+        max_features=max_features,
+        bootstrap=False,
+        max_leaf_nodes=max_leaf_nodes,
+        min_weight_fraction_leaf=min_weight_fraction_leaf,
+        min_impurity_decrease=min_impurity_decrease,
+        ccp_alpha=ccp_alpha,
+        random_state=42,
+        n_jobs=-1,  # CPUコアを最大限使う
+    )
 
-    # 固定パラメータ（例）
-    fixed_params = {
-        'objective': 'regression',
-        'metric': 'rmse',
-        'extra_trees': True,
-        'verbose': -1,
-        'seed': 42,
-        'device': 'cpu',
-    }
-
-    # --- 2. クロスバリデーション（5-fold）を用意 ---
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
 
-    # 評価スコアを格納するリスト
     scores = []
 
     # --- 3. k-fold で学習＆評価 ---
@@ -108,22 +125,9 @@ def objective(trial):
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-        model = LGBMRegressor(
-            learning_rate=learning_rate,
-            min_child_samples=min_child_samples,
-            reg_lambda=reg_lambda,
-            reg_alpha=reg_alpha,
-            num_leaves=num_leaves,
-            max_depth=max_depth,
-            num_iterations=num_iterations,
-            max_bin=max_bin,
-            **fixed_params
-        )
         # 学習（early_stopping を使いたい場合は eval_set, early_stopping_rounds を指定）
         model.fit(
-            X_train, y_train,
-            eval_set=[(X_val, y_val)],
-            callbacks=[lgb.early_stopping(100, verbose=0)]
+            X_train, y_train
         )
 
         # 予測
@@ -137,13 +141,9 @@ def objective(trial):
     # --- 4. fold の平均スコアを最終評価値として返す ---
     return np.mean(scores)
 
-
 # ========= Optuna で最適化実行 =========
 # 「最大化」を指定（自作スコアが大きいほど良いという扱い）
 study = optuna.create_study(direction='maximize')
-study.optimize(objective, n_trials=50)  # 試行回数=30 (例)
+study.optimize(objective, n_trials=50)  
 
- #score: 0.6740467722917443 parameters: {'learning_rate': 0.009453691809675214, 'min_child_samples': 14, 'reg_lambda': 0.038763067060145956, 'reg_alpha': 0.023205959833390973, 'num_leaves': 23, 'max_depth': 7}
- #score: 0.674140767427265  parameters: {'learning_rate': 0.010249196427607903, 'min_child_samples': 7, 'reg_lambda': 0.04381443853306703, 'reg_alpha': 0.010856948539014647, 'num_leaves': 30, 'max_depth': 6, 'num_iterations': 5500}
- #score: 0.6743606622729108 parameters: {'learning_rate': 0.010247473758487297, 'min_child_samples': 14, 'reg_lambda': 0.025968901196413107, 'reg_alpha': 0.010082657579302273, 'num_leaves': 26, 'max_depth': 11, 'num_iterations': 5300, 'max_bin': 224}
- #score: 0.6745001987295776 parameters: {'learning_rate': 0.011280997556651065, 'min_child_samples': 10, 'reg_lambda': 0.021238168657597097, 'reg_alpha': 0.1728826435936071, 'num_leaves': 28, 'max_depth': 13, 'num_iterations': 5500, 'max_bin': 240}
+#{'n_estimators': 500, 'max_depth': 20, 'min_samples_split': 7, 'min_samples_leaf': 3, 'max_features': 'sqrt', 'bootstrap': False, 'max_leaf_nodes': 84, 'min_weight_fraction_leaf': 0.18339115885496424, 'min_impurity_decrease': 0.00026095296642912255, 'min_impurity_split': 0.27752486516167274, 'ccp_alpha': 0.0002038254511892803, 'max_samples': 0.6318967225731346}. Best is trial 13 with value: 0.6566553958478558.

@@ -95,12 +95,12 @@ for i in range(FOLDS):
         metric='rmse',
         max_depth=7,
         device='cpu',
-        max_bin=128,
+        #max_bin=128,
         verbose=-1
         )
 
     #[I 2025-02-23 00:44:44,922] Trial 46 finished with value: 0.6740467722917443 and parameters: {'learning_rate': 0.009453691809675214, 'min_child_samples': 14, 'reg_lambda': 0.038763067060145956, 'reg_alpha': 0.023205959833390973, 'num_leaves': 23, 'max_depth': 7}. Best is trial 46 with value: 0.6740467722917443.
-  
+    #0.6743606622729108 and parameters: {'learning_rate': 0.010247473758487297, 'min_child_samples': 14, 'reg_lambda': 0.025968901196413107, 'reg_alpha': 0.010082657579302273, 'num_leaves': 26, 'max_depth': 11, 'num_iterations': 5300, 'max_bin': 224}
     model_lgb.fit(
         x_train, y_train,
         eval_set=[(x_valid, y_valid)]
